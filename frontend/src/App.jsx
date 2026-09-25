@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { createClient } from "genlayer-js";
-import { studionet } from "genlayer-js/chains";
+import { testnetBradbury } from "genlayer-js/chains";
 import "./index.css";
 
 const CONTRACT_ADDRESS =
-  "0x6d7f353ceaf886F4056Ae4A77D0F10D37a4A3Eb4";
+  "0xE02404444C539ba9840b62eCf410FCb7e05625e2";
 
 const DEFAULT_CLAIM =
   "OpenAI introduced GPT-5 on August 7, 2025.";
@@ -58,12 +58,12 @@ function App() {
       const address = accounts[0];
 
       const client = createClient({
-        chain: studionet,
+        chain: testnetBradbury,
         account: address,
         provider: window.ethereum,
       });
 
-      await client.connect("studionet");
+      await client.connect("testnetBradbury");
 
       setWalletAddress(address);
     } catch (err) {
@@ -122,12 +122,12 @@ function App() {
       setLoading(true);
 
       const client = createClient({
-        chain: studionet,
+        chain: testnetBradbury,
         account: walletAddress,
         provider: window.ethereum,
       });
 
-      await client.connect("studionet");
+      await client.connect("testnetBradbury");
 
       const write = {
         address: CONTRACT_ADDRESS,
@@ -335,7 +335,7 @@ function App() {
 
               <span className="network-dot"></span>
 
-              Studionet
+              Bradbury
 
             </div>
 
@@ -494,7 +494,7 @@ function App() {
             </span>
 
             <a
-              href={`https://explorer-studio.genlayer.com/address/${CONTRACT_ADDRESS}`}
+              href={`https://explorer-bradbury.genlayer.com/address/${CONTRACT_ADDRESS}`}
               target="_blank"
               rel="noreferrer"
             >
@@ -677,7 +677,7 @@ function ResultCard({
             <p>
 
               <a
-                href={`https://explorer-studio.genlayer.com/tx/${txHash}`}
+                href={`https://explorer-bradbury.genlayer.com/tx/${txHash}`}
                 target="_blank"
                 rel="noreferrer"
               >
