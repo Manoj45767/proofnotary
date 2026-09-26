@@ -169,8 +169,8 @@ function App() {
        * genlayer-js 1.1.8 exposes this through
        * waitForTransactionReceipt().
        *
-       * Consensus can take longer than a normal EVM tx,
-       * so we allow up to 5 minutes here.
+       * Bradbury consensus can take longer than a normal
+       * EVM transaction, so we allow up to 30 minutes here.
        */
 
       const receipt =
@@ -181,7 +181,7 @@ function App() {
 
           interval: 5000,
 
-          retries: 60,
+          retries: 360,
 
           fullTransaction: false,
         });
