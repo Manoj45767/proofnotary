@@ -170,7 +170,7 @@ function App() {
        * waitForTransactionReceipt().
        *
        * Bradbury consensus can take longer than a normal
-       * EVM transaction, so we allow up to 30 minutes here.
+       * EVM transaction, so we allow up to 60 minutes here.
        */
 
       const receipt =
@@ -181,7 +181,7 @@ function App() {
 
           interval: 5000,
 
-          retries: 360,
+          retries: 720,
 
           fullTransaction: false,
         });
