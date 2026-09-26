@@ -29,6 +29,9 @@ function App() {
 
   const [loading, setLoading] = useState(false);
 
+  const [loadingSavedResult, setLoadingSavedResult] =
+    useState(false);
+
   const [error, setError] = useState("");
 
   const [result, setResult] = useState(null);
@@ -52,7 +55,9 @@ function App() {
       });
 
       if (!accounts || accounts.length === 0) {
-        throw new Error("No wallet account was selected.");
+        throw new Error(
+          "No wallet account was selected."
+        );
       }
 
       const address = accounts[0];
@@ -66,8 +71,13 @@ function App() {
       await client.connect("testnetBradbury");
 
       setWalletAddress(address);
+
+      await loadSavedResult(client);
     } catch (err) {
-      console.error("Wallet connection error:", err);
+      console.error(
+        "Wallet connection error:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -75,6 +85,74 @@ function App() {
       );
     } finally {
       setConnecting(false);
+    }
+  }
+
+  async function loadSavedResult(client) {
+    try {
+      setLoadingSavedResult(true);
+
+      const contractResult =
+        await client.readContract({
+          address: CONTRACT_ADDRESS,
+          functionName: "get_result",
+          args: [],
+        });
+
+      console.log(
+        "Saved ProofNotary result:",
+        contractResult
+      );
+
+      const textResult =
+        String(contractResult);
+
+      const parsed =
+        parseContractResult(textResult);
+
+      /*
+       * The contract starts with empty values.
+       *
+       * Only show a saved result when a previous
+       * verification actually exists.
+       */
+
+      if (parsed.claim.trim()) {
+        setResult({
+          raw: textResult,
+          ...parsed,
+        });
+
+        setClaim(parsed.claim);
+
+        if (parsed.source.trim()) {
+          setSourceUrl(parsed.source);
+        }
+
+        /*
+         * The contract stores the verification result,
+         * but not the transaction hash.
+         *
+         * Therefore a previously loaded result does
+         * not have a transaction link here.
+         */
+
+        setTxHash("");
+      } else {
+        setResult(null);
+      }
+    } catch (err) {
+      console.error(
+        "Saved result loading error:",
+        err
+      );
+
+      /*
+       * Don't block wallet connection if the saved
+       * result cannot be loaded.
+       */
+    } finally {
+      setLoadingSavedResult(false);
     }
   }
 
@@ -145,12 +223,8 @@ function App() {
       /*
        * Submit the GenLayer transaction.
        *
-       * We intentionally don't call the fee-estimation
-       * helper here because the browser runtime we tested
-       * does not expose that helper.
-       *
-       * The wallet itself shows the estimated GEN fee
-       * before confirmation.
+       * The browser wallet shows the estimated
+       * GEN fee before confirmation.
        */
 
       const transactionHash =
@@ -164,13 +238,12 @@ function App() {
       setTxHash(transactionHash);
 
       /*
-       * Wait for the GenLayer transaction to become FINALIZED.
+       * Wait for the GenLayer transaction to become
+       * FINALIZED.
        *
-       * genlayer-js 1.1.8 exposes this through
-       * waitForTransactionReceipt().
-       *
-       * Bradbury consensus can take longer than a normal
-       * EVM transaction, so we allow up to 60 minutes here.
+       * Bradbury consensus can take longer than a
+       * normal EVM transaction, so we allow up to
+       * 60 minutes here.
        */
 
       const receipt =
@@ -192,10 +265,11 @@ function App() {
       );
 
       /*
-       * A transaction can be finalized while the contract
-       * execution itself failed.
+       * A transaction can be finalized while the
+       * contract execution itself failed.
        *
-       * Check the execution result before reading the state.
+       * Check the execution result before reading
+       * the contract state.
        */
 
       if (
@@ -258,9 +332,7 @@ function App() {
 
   return (
     <div className="app">
-
       <header className="hero">
-
         <div className="hero-badge">
           <span className="hero-dot"></span>
 
@@ -285,7 +357,6 @@ function App() {
         </p>
 
         <div className="hero-actions">
-
           {!walletAddress ? (
             <button
               className="connect-button"
@@ -298,28 +369,20 @@ function App() {
             </button>
           ) : (
             <div className="wallet-pill">
-
               <span className="wallet-dot"></span>
 
               {shortenAddress(
                 walletAddress
               )}
-
             </div>
           )}
-
         </div>
-
       </header>
 
       <main className="main-content">
-
         <section className="verification-card">
-
           <div className="card-header">
-
             <div>
-
               <h2>
                 New Verification
               </h2>
@@ -328,21 +391,34 @@ function App() {
                 Provide the statement you
                 want to verify and its source.
               </p>
-
             </div>
 
             <div className="network-pill">
-
               <span className="network-dot"></span>
 
               Bradbury
-
             </div>
-
           </div>
 
-          <div className="form-group">
+          {loadingSavedResult && (
+            <div className="status-box">
+              <div className="loading-spinner"></div>
 
+              <div>
+                <strong>
+                  Loading saved result
+                </strong>
+
+                <p>
+                  Reading the latest
+                  ProofNotary result from
+                  the blockchain.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="form-group">
             <label htmlFor="claim">
               Claim
             </label>
@@ -356,11 +432,9 @@ function App() {
               placeholder="Enter a factual claim..."
               disabled={loading}
             />
-
           </div>
 
           <div className="form-group">
-
             <label htmlFor="sourceUrl">
               Source URL
             </label>
@@ -375,13 +449,15 @@ function App() {
               placeholder="https://example.com/article"
               disabled={loading}
             />
-
           </div>
 
           <button
             className="verify-button"
             onClick={verifyClaim}
-            disabled={loading}
+            disabled={
+              loading ||
+              loadingSavedResult
+            }
           >
             {loading
               ? "Verifying..."
@@ -390,11 +466,9 @@ function App() {
 
           {loading && (
             <div className="status-box">
-
               <div className="loading-spinner"></div>
 
               <div>
-
                 <strong>
                   Verification in progress
                 </strong>
@@ -405,15 +479,12 @@ function App() {
                   consensus. This may take
                   a little while.
                 </p>
-
               </div>
-
             </div>
           )}
 
           {error && !loading && (
             <div className="error-box">
-
               <strong>
                 Error
               </strong>
@@ -421,7 +492,6 @@ function App() {
               <p>
                 {error}
               </p>
-
             </div>
           )}
 
@@ -431,13 +501,10 @@ function App() {
               txHash={txHash}
             />
           )}
-
         </section>
 
         <section className="architecture-section">
-
           <div className="section-heading">
-
             <span>
               HOW IT WORKS
             </span>
@@ -452,11 +519,9 @@ function App() {
               GenLayer consensus into one
               verifiable workflow.
             </p>
-
           </div>
 
           <div className="architecture-grid">
-
             <ArchitectureStep
               number="01"
               title="Submit"
@@ -480,15 +545,11 @@ function App() {
               title="Record"
               description="The verdict and explanation are stored on-chain."
             />
-
           </div>
-
         </section>
 
         <section className="contract-section">
-
           <div className="contract-info">
-
             <span>
               CONTRACT
             </span>
@@ -500,19 +561,14 @@ function App() {
             >
               {CONTRACT_ADDRESS}
             </a>
-
           </div>
-
         </section>
-
       </main>
-
     </div>
   );
 }
 
 function parseContractResult(text) {
-
   const claimMatch =
     text.match(
       /Claim:\s*([\s\S]*?)(?=\nSource:|\nVerdict:|$)/
@@ -570,7 +626,6 @@ function ResultCard({
   result,
   txHash,
 }) {
-
   const verdictClass =
     result.verdict === "VERIFIED"
       ? "verified"
@@ -582,11 +637,8 @@ function ResultCard({
     <div
       className={`result-box ${verdictClass}`}
     >
-
       <div className="result-top">
-
         <div>
-
           <span className="result-label">
             VERIFICATION RESULT
           </span>
@@ -594,25 +646,19 @@ function ResultCard({
           <h3>
             {result.verdict}
           </h3>
-
         </div>
 
         <div className="result-status">
-
           {result.verdict === "VERIFIED"
             ? "✓"
             : result.verdict === "REFUTED"
             ? "×"
             : "?"}
-
         </div>
-
       </div>
 
       <div className="result-content">
-
         <div className="result-row">
-
           <span>
             Claim
           </span>
@@ -620,17 +666,14 @@ function ResultCard({
           <p>
             {result.claim}
           </p>
-
         </div>
 
         <div className="result-row">
-
           <span>
             Source
           </span>
 
           <p>
-
             <a
               href={result.source}
               target="_blank"
@@ -638,13 +681,10 @@ function ResultCard({
             >
               {result.source}
             </a>
-
           </p>
-
         </div>
 
         <div className="result-row">
-
           <span>
             Explanation
           </span>
@@ -652,11 +692,9 @@ function ResultCard({
           <p>
             {result.explanation}
           </p>
-
         </div>
 
         <div className="result-row">
-
           <span>
             Evidence
           </span>
@@ -664,18 +702,15 @@ function ResultCard({
           <p>
             {result.evidence}
           </p>
-
         </div>
 
         {txHash && (
           <div className="result-row">
-
             <span>
               Transaction
             </span>
 
             <p>
-
               <a
                 href={`https://explorer-bradbury.genlayer.com/tx/${txHash}`}
                 target="_blank"
@@ -683,14 +718,10 @@ function ResultCard({
               >
                 {shortenAddress(txHash)}
               </a>
-
             </p>
-
           </div>
         )}
-
       </div>
-
     </div>
   );
 }
@@ -700,16 +731,13 @@ function ArchitectureStep({
   title,
   description,
 }) {
-
   return (
     <div className="architecture-step">
-
       <div className="step-number">
         {number}
       </div>
 
       <div>
-
         <h3>
           {title}
         </h3>
@@ -717,9 +745,7 @@ function ArchitectureStep({
         <p>
           {description}
         </p>
-
       </div>
-
     </div>
   );
 }
