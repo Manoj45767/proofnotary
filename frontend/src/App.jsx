@@ -4,7 +4,7 @@ import { testnetBradbury } from "genlayer-js/chains";
 import "./index.css";
 
 const CONTRACT_ADDRESS =
-  "0xE02404444C539ba9840b62eCf410FCb7e05625e2";
+  "0x849308A563Fc5b24aCfF9f832388F941edE135ff";
 
 const DEFAULT_CLAIM =
   "OpenAI introduced GPT-5 on August 7, 2025.";
@@ -41,7 +41,6 @@ function App() {
   async function connectWallet() {
     try {
       setError("");
-
       setConnecting(true);
 
       if (!window.ethereum) {
@@ -55,9 +54,7 @@ function App() {
       });
 
       if (!accounts || accounts.length === 0) {
-        throw new Error(
-          "No wallet account was selected."
-        );
+        throw new Error("No wallet account was selected.");
       }
 
       const address = accounts[0];
@@ -74,10 +71,7 @@ function App() {
 
       await loadSavedResult(client);
     } catch (err) {
-      console.error(
-        "Wallet connection error:",
-        err
-      );
+      console.error("Wallet connection error:", err);
 
       setError(
         err?.message ||
@@ -92,23 +86,20 @@ function App() {
     try {
       setLoadingSavedResult(true);
 
-      const contractResult =
-        await client.readContract({
-          address: CONTRACT_ADDRESS,
-          functionName: "get_result",
-          args: [],
-        });
+      const contractResult = await client.readContract({
+        address: CONTRACT_ADDRESS,
+        functionName: "get_result",
+        args: [],
+      });
 
       console.log(
         "Saved ProofNotary result:",
         contractResult
       );
 
-      const textResult =
-        String(contractResult);
+      const textResult = String(contractResult);
 
-      const parsed =
-        parseContractResult(textResult);
+      const parsed = parseContractResult(textResult);
 
       /*
        * The contract starts with empty values.
@@ -159,9 +150,7 @@ function App() {
   async function verifyClaim() {
     try {
       setError("");
-
       setResult(null);
-
       setTxHash("");
 
       if (!window.ethereum) {
@@ -177,9 +166,7 @@ function App() {
       }
 
       if (!claim.trim()) {
-        throw new Error(
-          "Please enter a claim."
-        );
+        throw new Error("Please enter a claim.");
       }
 
       if (!sourceUrl.trim()) {
@@ -278,9 +265,7 @@ function App() {
           "FINISHED_WITH_RETURN"
       ) {
         throw new Error(
-          `Contract execution failed: ${
-            receipt.txExecutionResultName
-          }`
+          `Contract execution failed: ${receipt.txExecutionResultName}`
         );
       }
 
@@ -537,13 +522,13 @@ function App() {
             <ArchitectureStep
               number="03"
               title="Consensus"
-              description="GenLayer validators reach consensus on the structured result."
+              description="GenLayer validators independently evaluate the source and reach consensus on the structured result."
             />
 
             <ArchitectureStep
               number="04"
               title="Record"
-              description="The verdict and explanation are stored on-chain."
+              description="The verdict, explanation, evidence, content hash and evidence ID are stored on-chain."
             />
           </div>
         </section>
@@ -571,12 +556,22 @@ function App() {
 function parseContractResult(text) {
   const claimMatch =
     text.match(
-      /Claim:\s*([\s\S]*?)(?=\nSource:|\nVerdict:|$)/
+      /Claim:\s*([\s\S]*?)(?=\nSource:|$)/
     );
 
   const sourceMatch =
     text.match(
-      /Source:\s*([\s\S]*?)(?=\nVerdict:|\nExplanation:|$)/
+      /Source:\s*([\s\S]*?)(?=\nContent Hash:|$)/
+    );
+
+  const contentHashMatch =
+    text.match(
+      /Content Hash:\s*([\s\S]*?)(?=\nEvidence ID:|$)/
+    );
+
+  const evidenceIdMatch =
+    text.match(
+      /Evidence ID:\s*([\s\S]*?)(?=\nVerdict:|$)/
     );
 
   const verdictMatch =
@@ -603,6 +598,16 @@ function parseContractResult(text) {
     source:
       sourceMatch
         ? sourceMatch[1].trim()
+        : "",
+
+    contentHash:
+      contentHashMatch
+        ? contentHashMatch[1].trim()
+        : "",
+
+    evidenceId:
+      evidenceIdMatch
+        ? evidenceIdMatch[1].trim()
         : "",
 
     verdict:
@@ -681,6 +686,28 @@ function ResultCard({
             >
               {result.source}
             </a>
+          </p>
+        </div>
+
+        <div className="result-row">
+          <span>
+            Content Hash
+          </span>
+
+          <p className="hash-value">
+            {result.contentHash ||
+              "Not available"}
+          </p>
+        </div>
+
+        <div className="result-row">
+          <span>
+            Evidence ID
+          </span>
+
+          <p className="hash-value">
+            {result.evidenceId ||
+              "Not available"}
           </p>
         </div>
 
