@@ -1,11 +1,13 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
+from dataclasses import dataclass
 import hashlib
 
 
-class ProofNotary(gl.Contract):
-
+@allow_storage
+@dataclass
+class VerificationRecord:
     claim: str
     source_url: str
     verdict: str
@@ -13,44 +15,163 @@ class ProofNotary(gl.Contract):
     evidence: str
     content_hash: str
     evidence_id: str
+    source_status: str
+
+
+class ProofNotary(gl.Contract):
+
+    # Persistent verification history.
+    #
+    # Each evidence_id points to one immutable verification record.
+    verification_records: TreeMap[str, VerificationRecord]
+
+    # Ordered list of every evidence ID created by this contract.
+    evidence_ids: DynArray[str]
+
+    # Most recently created evidence ID.
+    latest_evidence_id: str
+
+    # Monotonically increasing identifier.
+    #
+    # This prevents two otherwise identical verifications from
+    # overwriting each other.
+    next_evidence_nonce: u256
 
     def __init__(self):
-        self.claim = ""
-        self.source_url = ""
-        self.verdict = ""
-        self.explanation = ""
-        self.evidence = ""
-        self.content_hash = ""
-        self.evidence_id = ""
+        self.latest_evidence_id = ""
+        self.next_evidence_nonce = u256(1)
+
+    def _create_evidence_id(
+        self,
+        claim: str,
+        source_url: str,
+        verdict: str,
+        content_hash: str,
+        source_status: str,
+        nonce: u256,
+    ) -> str:
+
+        identity_material = (
+            str(nonce)
+            + "\n"
+            + claim
+            + "\n"
+            + source_url
+            + "\n"
+            + verdict
+            + "\n"
+            + content_hash
+            + "\n"
+            + source_status
+        )
+
+        identity_hash = hashlib.sha256(
+            identity_material.encode("utf-8")
+        ).hexdigest()
+
+        if content_hash:
+            return (
+                "proofnotary:"
+                + content_hash
+                + ":"
+                + str(nonce)
+                + ":"
+                + identity_hash[:16]
+            )
+
+        return (
+            "proofnotary:"
+            + str(nonce)
+            + ":"
+            + identity_hash
+        )
+
+    def _store_record(
+        self,
+        claim: str,
+        source_url: str,
+        verdict: str,
+        explanation: str,
+        evidence: str,
+        content_hash: str,
+        source_status: str,
+    ) -> str:
+
+        nonce = self.next_evidence_nonce
+
+        evidence_id = self._create_evidence_id(
+            claim=claim,
+            source_url=source_url,
+            verdict=verdict,
+            content_hash=content_hash,
+            source_status=source_status,
+            nonce=nonce,
+        )
+
+        record = VerificationRecord(
+            claim=claim,
+            source_url=source_url,
+            verdict=verdict,
+            explanation=explanation,
+            evidence=evidence,
+            content_hash=content_hash,
+            evidence_id=evidence_id,
+            source_status=source_status,
+        )
+
+        self.verification_records[evidence_id] = record
+        self.evidence_ids.append(evidence_id)
+        self.latest_evidence_id = evidence_id
+        self.next_evidence_nonce = nonce + 1
+
+        return evidence_id
 
     @gl.public.write
     def verify_claim(self, claim: str, source_url: str):
 
+        # ---------------------------------------------------------
+        # Deterministic input validation
+        # ---------------------------------------------------------
+
         if not claim.strip():
-            self.claim = claim
-            self.source_url = source_url
-            self.verdict = "UNCERTAIN"
-            self.explanation = "No claim was provided."
-            self.evidence = "A claim is required."
-            self.content_hash = ""
-            self.evidence_id = ""
+
+            self._store_record(
+                claim=claim,
+                source_url=source_url,
+                verdict="UNCERTAIN",
+                explanation="No claim was provided.",
+                evidence="A claim is required.",
+                content_hash="",
+                source_status="INVALID_INPUT",
+            )
+
             return
 
         if not source_url.startswith("http"):
-            self.claim = claim
-            self.source_url = source_url
-            self.verdict = "UNCERTAIN"
-            self.explanation = "The source URL is invalid."
-            self.evidence = (
-                "The source URL must start with http or https."
+
+            self._store_record(
+                claim=claim,
+                source_url=source_url,
+                verdict="UNCERTAIN",
+                explanation="The source URL is invalid.",
+                evidence=(
+                    "The source URL must start with "
+                    "http or https."
+                ),
+                content_hash="",
+                source_status="INVALID_INPUT",
             )
-            self.content_hash = ""
-            self.evidence_id = ""
+
             return
+
+        # ---------------------------------------------------------
+        # Leader / validator source evaluation
+        # ---------------------------------------------------------
 
         def evaluate_source():
 
             try:
+
                 page = gl.nondet.web.render(
                     source_url,
                     mode="text"
@@ -63,6 +184,7 @@ class ProofNotary(gl.Contract):
                 ).hexdigest()
 
             except Exception:
+
                 return {
                     "verdict": "UNCERTAIN",
                     "explanation": (
@@ -74,7 +196,7 @@ class ProofNotary(gl.Contract):
                         "or loading error."
                     ),
                     "content_hash": "",
-                    "source_status": "UNAVAILABLE"
+                    "source_status": "UNAVAILABLE",
                 }
 
             prompt = f"""
@@ -135,12 +257,14 @@ Important:
 """
 
             try:
+
                 result = gl.nondet.exec_prompt(
                     prompt,
                     response_format="json"
                 )
 
                 if not isinstance(result, dict):
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -152,18 +276,23 @@ Important:
                             "was returned."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
 
                 verdict = result.get("verdict")
                 explanation = result.get("explanation")
                 evidence = result.get("evidence")
 
+                # -------------------------------------------------
+                # Verdict validation
+                # -------------------------------------------------
+
                 if verdict not in [
                     "VERIFIED",
                     "REFUTED",
-                    "UNCERTAIN"
+                    "UNCERTAIN",
                 ]:
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -175,13 +304,18 @@ Important:
                             "one of the allowed values."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
+
+                # -------------------------------------------------
+                # Explanation validation
+                # -------------------------------------------------
 
                 if not isinstance(
                     explanation,
-                    str
+                    str,
                 ):
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -193,13 +327,18 @@ Important:
                             "a string."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
+
+                # -------------------------------------------------
+                # Evidence validation
+                # -------------------------------------------------
 
                 if not isinstance(
                     evidence,
-                    str
+                    str,
                 ):
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -211,10 +350,11 @@ Important:
                             "a string."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
 
                 if len(explanation.strip()) == 0:
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -226,10 +366,11 @@ Important:
                             "was returned."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
 
                 if len(evidence.strip()) == 0:
+
                     return {
                         "verdict": "UNCERTAIN",
                         "explanation": (
@@ -241,7 +382,7 @@ Important:
                             "was returned."
                         ),
                         "content_hash": content_hash,
-                        "source_status": "INVALID_RESULT"
+                        "source_status": "INVALID_RESULT",
                     }
 
                 return {
@@ -249,10 +390,11 @@ Important:
                     "explanation": explanation,
                     "evidence": evidence,
                     "content_hash": content_hash,
-                    "source_status": "AVAILABLE"
+                    "source_status": "AVAILABLE",
                 }
 
             except Exception:
+
                 return {
                     "verdict": "UNCERTAIN",
                     "explanation": (
@@ -264,14 +406,18 @@ Important:
                         "an execution error."
                     ),
                     "content_hash": content_hash,
-                    "source_status": "EVALUATION_ERROR"
+                    "source_status": "EVALUATION_ERROR",
                 }
+
+        # ---------------------------------------------------------
+        # Independent validator evaluation
+        # ---------------------------------------------------------
 
         def validator_fn(leader_result):
 
             if not isinstance(
                 leader_result,
-                gl.vm.Return
+                gl.vm.Return,
             ):
                 return False
 
@@ -279,7 +425,7 @@ Important:
 
             if not isinstance(
                 leader_data,
-                dict
+                dict,
             ):
                 return False
 
@@ -295,30 +441,41 @@ Important:
                 "source_status"
             )
 
+            # -----------------------------------------------------
+            # Validate leader result structure
+            # -----------------------------------------------------
+
             if leader_verdict not in [
                 "VERIFIED",
                 "REFUTED",
-                "UNCERTAIN"
+                "UNCERTAIN",
             ]:
                 return False
 
             if not isinstance(
                 leader_hash,
-                str
+                str,
             ):
                 return False
 
             if not isinstance(
                 leader_status,
-                str
+                str,
             ):
                 return False
+
+            # -----------------------------------------------------
+            # IMPORTANT:
+            #
+            # Validator independently retrieves the source
+            # and independently performs the AI evaluation.
+            # -----------------------------------------------------
 
             validator_data = evaluate_source()
 
             if not isinstance(
                 validator_data,
-                dict
+                dict,
             ):
                 return False
 
@@ -334,36 +491,48 @@ Important:
                 "source_status"
             )
 
+            # -----------------------------------------------------
+            # Validate validator result
+            # -----------------------------------------------------
+
             if validator_verdict not in [
                 "VERIFIED",
                 "REFUTED",
-                "UNCERTAIN"
+                "UNCERTAIN",
             ]:
                 return False
 
             if not isinstance(
                 validator_hash,
-                str
+                str,
             ):
                 return False
 
             if not isinstance(
                 validator_status,
-                str
+                str,
             ):
                 return False
 
-            # The validator independently retrieved
-            # and evaluated the source.
+            # -----------------------------------------------------
+            # Substantive decision must agree.
             #
-            # The substantive verdict must agree.
+            # This is NOT just schema validation.
+            # The validator independently evaluated the source.
+            # -----------------------------------------------------
+
             if leader_verdict != validator_verdict:
                 return False
 
-            # If source content was available, both
-            # executions must have evaluated the same
-            # content snapshot.
+            # -----------------------------------------------------
+            # Available source:
+            #
+            # Both leader and validator must have retrieved
+            # the same content snapshot.
+            # -----------------------------------------------------
+
             if leader_status == "AVAILABLE":
+
                 if validator_status != "AVAILABLE":
                     return False
 
@@ -376,10 +545,15 @@ Important:
                 if leader_hash != validator_hash:
                     return False
 
-            # If the leader could not retrieve the
-            # source, the validator must independently
-            # observe the same unavailable-source state.
+            # -----------------------------------------------------
+            # Unavailable / failed source:
+            #
+            # Both executions must independently observe the
+            # same failure state and must return UNCERTAIN.
+            # -----------------------------------------------------
+
             else:
+
                 if validator_status != leader_status:
                     return False
 
@@ -388,52 +562,140 @@ Important:
 
             return True
 
+        # ---------------------------------------------------------
+        # Consensus execution
+        # ---------------------------------------------------------
+
         result = gl.vm.run_nondet_unsafe(
             evaluate_source,
-            validator_fn
+            validator_fn,
         )
+
+        # ---------------------------------------------------------
+        # Consensus result
+        #
+        # IMPORTANT:
+        # No storage writes happen inside the nondeterministic
+        # evaluation. Storage is updated only after consensus.
+        # ---------------------------------------------------------
 
         final_hash = result.get(
             "content_hash",
-            ""
+            "",
         )
 
         final_verdict = result.get(
             "verdict",
-            "UNCERTAIN"
+            "UNCERTAIN",
         )
 
-        self.claim = claim
-        self.source_url = source_url
-        self.verdict = final_verdict
-        self.explanation = result.get(
+        final_explanation = result.get(
             "explanation",
-            ""
+            "",
         )
-        self.evidence = result.get(
-            "evidence",
-            ""
-        )
-        self.content_hash = final_hash
 
-        if final_hash:
-            self.evidence_id = (
-                source_url +
-                "#" +
-                final_hash
-            )
-        else:
-            self.evidence_id = ""
+        final_evidence = result.get(
+            "evidence",
+            "",
+        )
+
+        final_source_status = result.get(
+            "source_status",
+            "UNKNOWN",
+        )
+
+        # ---------------------------------------------------------
+        # Persistent record creation
+        #
+        # Every verification receives its own unique evidence ID.
+        # Existing verification records are never overwritten.
+        # ---------------------------------------------------------
+
+        self._store_record(
+            claim=claim,
+            source_url=source_url,
+            verdict=final_verdict,
+            explanation=final_explanation,
+            evidence=final_evidence,
+            content_hash=final_hash,
+            source_status=final_source_status,
+        )
+
+    # -------------------------------------------------------------
+    # Latest result
+    #
+    # Kept for frontend compatibility.
+    # It returns the most recently stored verification.
+    # -------------------------------------------------------------
 
     @gl.public.view
     def get_result(self) -> str:
 
-        return (
-            "Claim: " + self.claim +
-            "\nSource: " + self.source_url +
-            "\nContent Hash: " + self.content_hash +
-            "\nEvidence ID: " + self.evidence_id +
-            "\nVerdict: " + self.verdict +
-            "\nExplanation: " + self.explanation +
-            "\nEvidence: " + self.evidence
+        if not self.latest_evidence_id:
+            return (
+                "No verification records have been stored."
+            )
+
+        return self.get_result_by_evidence_id(
+            self.latest_evidence_id
         )
+
+    # -------------------------------------------------------------
+    # Retrieve one exact verification by evidence ID.
+    #
+    # This directly addresses the steward's requirement that
+    # get_result must be able to retrieve a specific record.
+    # -------------------------------------------------------------
+
+    @gl.public.view
+    def get_result_by_evidence_id(
+        self,
+        evidence_id: str,
+    ) -> str:
+
+        if evidence_id not in self.verification_records:
+            return (
+                "Verification record not found for evidence ID: "
+                + evidence_id
+            )
+
+        record = self.verification_records[
+            evidence_id
+        ]
+
+        return (
+            "Claim: "
+            + record.claim
+            + "\nSource: "
+            + record.source_url
+            + "\nContent Hash: "
+            + record.content_hash
+            + "\nEvidence ID: "
+            + record.evidence_id
+            + "\nSource Status: "
+            + record.source_status
+            + "\nVerdict: "
+            + record.verdict
+            + "\nExplanation: "
+            + record.explanation
+            + "\nEvidence: "
+            + record.evidence
+        )
+
+    # -------------------------------------------------------------
+    # Return the latest evidence ID.
+    # -------------------------------------------------------------
+
+    @gl.public.view
+    def get_latest_evidence_id(self) -> str:
+
+        return self.latest_evidence_id
+
+    # -------------------------------------------------------------
+    # Return every evidence ID in creation order.
+    # -------------------------------------------------------------
+
+    @gl.public.view
+    def get_evidence_ids(self) -> DynArray[str]:
+
+        return self.evidence_ids

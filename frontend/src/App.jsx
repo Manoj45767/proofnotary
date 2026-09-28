@@ -4,7 +4,7 @@ import { testnetBradbury } from "genlayer-js/chains";
 import "./index.css";
 
 const CONTRACT_ADDRESS =
-  "0x849308A563Fc5b24aCfF9f832388F941edE135ff";
+  "0x22a6b676Eb9580ba07f77AE8731d4920bDF84145";
 
 const DEFAULT_CLAIM =
   "OpenAI introduced GPT-5 on August 7, 2025.";
@@ -23,11 +23,14 @@ function App() {
 
   const [claim, setClaim] = useState(DEFAULT_CLAIM);
 
-  const [sourceUrl, setSourceUrl] = useState(DEFAULT_SOURCE);
+  const [sourceUrl, setSourceUrl] =
+    useState(DEFAULT_SOURCE);
 
-  const [connecting, setConnecting] = useState(false);
+  const [connecting, setConnecting] =
+    useState(false);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
   const [loadingSavedResult, setLoadingSavedResult] =
     useState(false);
@@ -37,6 +40,9 @@ function App() {
   const [result, setResult] = useState(null);
 
   const [txHash, setTxHash] = useState("");
+
+  const [verificationHistory, setVerificationHistory] =
+    useState([]);
 
   async function connectWallet() {
     try {
@@ -49,12 +55,18 @@ function App() {
         );
       }
 
-      const accounts = await window.ethereum.request({
-        method: "eth_requestAccounts",
-      });
+      const accounts =
+        await window.ethereum.request({
+          method: "eth_requestAccounts",
+        });
 
-      if (!accounts || accounts.length === 0) {
-        throw new Error("No wallet account was selected.");
+      if (
+        !accounts ||
+        accounts.length === 0
+      ) {
+        throw new Error(
+          "No wallet account was selected."
+        );
       }
 
       const address = accounts[0];
@@ -65,13 +77,18 @@ function App() {
         provider: window.ethereum,
       });
 
-      await client.connect("testnetBradbury");
+      await client.connect(
+        "testnetBradbury"
+      );
 
       setWalletAddress(address);
 
       await loadSavedResult(client);
     } catch (err) {
-      console.error("Wallet connection error:", err);
+      console.error(
+        "Wallet connection error:",
+        err
+      );
 
       setError(
         err?.message ||
@@ -86,52 +103,123 @@ function App() {
     try {
       setLoadingSavedResult(true);
 
-      const contractResult = await client.readContract({
-        address: CONTRACT_ADDRESS,
-        functionName: "get_result",
-        args: [],
-      });
-
-      console.log(
-        "Saved ProofNotary result:",
-        contractResult
-      );
-
-      const textResult = String(contractResult);
-
-      const parsed = parseContractResult(textResult);
-
       /*
-       * The contract starts with empty values.
+       * Load every persistent Evidence ID.
        *
-       * Only show a saved result when a previous
-       * verification actually exists.
+       * ProofNotary now stores every verification
+       * as a separate durable record.
        */
 
-      if (parsed.claim.trim()) {
-        setResult({
-          raw: textResult,
-          ...parsed,
+      const evidenceIdsResult =
+        await client.readContract({
+          address: CONTRACT_ADDRESS,
+          functionName: "get_evidence_ids",
+          args: [],
         });
 
-        setClaim(parsed.claim);
+      console.log(
+        "ProofNotary evidence IDs:",
+        evidenceIdsResult
+      );
 
-        if (parsed.source.trim()) {
-          setSourceUrl(parsed.source);
+      const evidenceIds =
+        normalizeEvidenceIds(
+          evidenceIdsResult
+        );
+
+      const records = [];
+
+      for (const evidenceId of evidenceIds) {
+        try {
+          const contractResult =
+            await client.readContract({
+              address: CONTRACT_ADDRESS,
+              functionName:
+                "get_result_by_evidence_id",
+              args: [evidenceId],
+            });
+
+          const textResult =
+            String(contractResult);
+
+          const parsed =
+            parseContractResult(
+              textResult
+            );
+
+          if (parsed.claim.trim()) {
+            records.push({
+              raw: textResult,
+              ...parsed,
+            });
+          }
+        } catch (recordError) {
+          console.error(
+            "Could not load verification record:",
+            evidenceId,
+            recordError
+          );
         }
+      }
 
-        /*
-         * The contract stores the verification result,
-         * but not the transaction hash.
-         *
-         * Therefore a previously loaded result does
-         * not have a transaction link here.
-         */
+      setVerificationHistory(records);
 
-        setTxHash("");
+      /*
+       * Load the latest Evidence ID.
+       */
+
+      const latestEvidenceIdResult =
+        await client.readContract({
+          address: CONTRACT_ADDRESS,
+          functionName:
+            "get_latest_evidence_id",
+          args: [],
+        });
+
+      const latestEvidenceId =
+        String(
+          latestEvidenceIdResult || ""
+        ).trim();
+
+      /*
+       * Retrieve the latest record using its
+       * exact Evidence ID.
+       */
+
+      if (latestEvidenceId) {
+        const latestResult =
+          await client.readContract({
+            address: CONTRACT_ADDRESS,
+            functionName:
+              "get_result_by_evidence_id",
+            args: [latestEvidenceId],
+          });
+
+        const textResult =
+          String(latestResult);
+
+        const parsed =
+          parseContractResult(
+            textResult
+          );
+
+        if (parsed.claim.trim()) {
+          setResult({
+            raw: textResult,
+            ...parsed,
+          });
+
+          setClaim(parsed.claim);
+
+          if (parsed.source.trim()) {
+            setSourceUrl(parsed.source);
+          }
+        }
       } else {
         setResult(null);
       }
+
+      setTxHash("");
     } catch (err) {
       console.error(
         "Saved result loading error:",
@@ -139,11 +227,74 @@ function App() {
       );
 
       /*
-       * Don't block wallet connection if the saved
-       * result cannot be loaded.
+       * Don't block wallet connection if the
+       * saved result cannot be loaded.
        */
+
+      setResult(null);
+      setVerificationHistory([]);
     } finally {
       setLoadingSavedResult(false);
+    }
+  }
+
+  async function loadVerificationHistory(
+    client
+  ) {
+    try {
+      const evidenceIdsResult =
+        await client.readContract({
+          address: CONTRACT_ADDRESS,
+          functionName: "get_evidence_ids",
+          args: [],
+        });
+
+      const evidenceIds =
+        normalizeEvidenceIds(
+          evidenceIdsResult
+        );
+
+      const records = [];
+
+      for (const evidenceId of evidenceIds) {
+        try {
+          const contractResult =
+            await client.readContract({
+              address: CONTRACT_ADDRESS,
+              functionName:
+                "get_result_by_evidence_id",
+              args: [evidenceId],
+            });
+
+          const textResult =
+            String(contractResult);
+
+          const parsed =
+            parseContractResult(
+              textResult
+            );
+
+          if (parsed.claim.trim()) {
+            records.push({
+              raw: textResult,
+              ...parsed,
+            });
+          }
+        } catch (recordError) {
+          console.error(
+            "History record loading error:",
+            evidenceId,
+            recordError
+          );
+        }
+      }
+
+      setVerificationHistory(records);
+    } catch (err) {
+      console.error(
+        "Verification history loading error:",
+        err
+      );
     }
   }
 
@@ -166,7 +317,9 @@ function App() {
       }
 
       if (!claim.trim()) {
-        throw new Error("Please enter a claim.");
+        throw new Error(
+          "Please enter a claim."
+        );
       }
 
       if (!sourceUrl.trim()) {
@@ -176,8 +329,12 @@ function App() {
       }
 
       if (
-        !sourceUrl.startsWith("http://") &&
-        !sourceUrl.startsWith("https://")
+        !sourceUrl.startsWith(
+          "http://"
+        ) &&
+        !sourceUrl.startsWith(
+          "https://"
+        )
       ) {
         throw new Error(
           "Source URL must start with http:// or https://"
@@ -192,7 +349,9 @@ function App() {
         provider: window.ethereum,
       });
 
-      await client.connect("testnetBradbury");
+      await client.connect(
+        "testnetBradbury"
+      );
 
       const write = {
         address: CONTRACT_ADDRESS,
@@ -209,9 +368,6 @@ function App() {
 
       /*
        * Submit the GenLayer transaction.
-       *
-       * The browser wallet shows the estimated
-       * GEN fee before confirmation.
        */
 
       const transactionHash =
@@ -225,12 +381,10 @@ function App() {
       setTxHash(transactionHash);
 
       /*
-       * Wait for the GenLayer transaction to become
-       * FINALIZED.
+       * Wait for Bradbury finalization.
        *
-       * Bradbury consensus can take longer than a
-       * normal EVM transaction, so we allow up to
-       * 60 minutes here.
+       * Maximum wait:
+       * 720 retries x 5 seconds = 60 minutes.
        */
 
       const receipt =
@@ -254,9 +408,6 @@ function App() {
       /*
        * A transaction can be finalized while the
        * contract execution itself failed.
-       *
-       * Check the execution result before reading
-       * the contract state.
        */
 
       if (
@@ -270,22 +421,53 @@ function App() {
       }
 
       /*
-       * The transaction is finalized successfully.
-       *
-       * Now read the result stored by ProofNotary.
+       * Get the Evidence ID created by this
+       * verification.
+       */
+
+      const latestEvidenceIdResult =
+        await client.readContract({
+          address: CONTRACT_ADDRESS,
+
+          functionName:
+            "get_latest_evidence_id",
+
+          args: [],
+        });
+
+      const latestEvidenceId =
+        String(
+          latestEvidenceIdResult || ""
+        ).trim();
+
+      if (!latestEvidenceId) {
+        throw new Error(
+          "The verification finalized, but no Evidence ID was returned."
+        );
+      }
+
+      console.log(
+        "ProofNotary Evidence ID:",
+        latestEvidenceId
+      );
+
+      /*
+       * Retrieve the exact persistent record
+       * using the Evidence ID.
        */
 
       const contractResult =
         await client.readContract({
           address: CONTRACT_ADDRESS,
 
-          functionName: "get_result",
+          functionName:
+            "get_result_by_evidence_id",
 
-          args: [],
+          args: [latestEvidenceId],
         });
 
       console.log(
-        "ProofNotary result:",
+        "ProofNotary durable result:",
         contractResult
       );
 
@@ -293,13 +475,23 @@ function App() {
         String(contractResult);
 
       const parsed =
-        parseContractResult(textResult);
+        parseContractResult(
+          textResult
+        );
 
       setResult({
         raw: textResult,
 
         ...parsed,
       });
+
+      /*
+       * Refresh the complete persistent history.
+       */
+
+      await loadVerificationHistory(
+        client
+      );
     } catch (err) {
       console.error(
         "Verification error:",
@@ -337,8 +529,10 @@ function App() {
           Submit a claim and a source URL.
           ProofNotary evaluates the source
           using GenLayer&apos;s Intelligent
-          Contract execution and records
-          the resulting verdict on-chain.
+          Contract execution, independent
+          validator evaluation and consensus,
+          then stores a durable verification
+          record on-chain.
         </p>
 
         <div className="hero-actions">
@@ -395,9 +589,9 @@ function App() {
                 </strong>
 
                 <p>
-                  Reading the latest
-                  ProofNotary result from
-                  the blockchain.
+                  Reading ProofNotary&apos;s
+                  durable verification history
+                  from the blockchain.
                 </p>
               </div>
             </div>
@@ -488,6 +682,41 @@ function App() {
           )}
         </section>
 
+        {verificationHistory.length > 0 && (
+          <section className="architecture-section">
+            <div className="section-heading">
+              <span>
+                VERIFICATION HISTORY
+              </span>
+
+              <h2>
+                Durable on-chain records
+              </h2>
+
+              <p>
+                Each verification is stored
+                under its own Evidence ID and
+                can be retrieved independently.
+              </p>
+            </div>
+
+            <div className="architecture-grid">
+              {verificationHistory.map(
+                (record, index) => (
+                  <HistoryCard
+                    key={
+                      record.evidenceId ||
+                      index
+                    }
+                    record={record}
+                    index={index}
+                  />
+                )
+              )}
+            </div>
+          </section>
+        )}
+
         <section className="architecture-section">
           <div className="section-heading">
             <span>
@@ -500,9 +729,11 @@ function App() {
 
             <p>
               ProofNotary combines web
-              evidence, AI evaluation and
-              GenLayer consensus into one
-              verifiable workflow.
+              evidence, AI evaluation,
+              independent validator
+              evaluation and GenLayer
+              consensus into one verifiable
+              workflow.
             </p>
           </div>
 
@@ -522,13 +753,13 @@ function App() {
             <ArchitectureStep
               number="03"
               title="Consensus"
-              description="GenLayer validators independently evaluate the source and reach consensus on the structured result."
+              description="GenLayer validators independently evaluate the source and compare the substantive result."
             />
 
             <ArchitectureStep
               number="04"
               title="Record"
-              description="The verdict, explanation, evidence, content hash and evidence ID are stored on-chain."
+              description="The verdict, explanation, evidence, content hash and unique Evidence ID are stored on-chain."
             />
           </div>
         </section>
@@ -553,25 +784,69 @@ function App() {
   );
 }
 
+function normalizeEvidenceIds(value) {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item))
+      .filter(Boolean);
+  }
+
+  if (
+    typeof value === "object" &&
+    Array.isArray(value.items)
+  ) {
+    return value.items
+      .map((item) => String(item))
+      .filter(Boolean);
+  }
+
+  const text = String(value).trim();
+
+  if (!text) {
+    return [];
+  }
+
+  return text
+    .split(",")
+    .map((item) =>
+      item
+        .replace(
+          /^['"\s]+|['"\s]+$/g,
+          ""
+        )
+        .trim()
+    )
+    .filter(Boolean);
+}
+
 function parseContractResult(text) {
   const claimMatch =
     text.match(
-      /Claim:\s*([\s\S]*?)(?=\nSource:|$)/
+      /Claim:\s*([\s\S]*?)(?=\nSource:|\nContent Hash:|\nEvidence ID:|$)/
     );
 
   const sourceMatch =
     text.match(
-      /Source:\s*([\s\S]*?)(?=\nContent Hash:|$)/
+      /Source:\s*([\s\S]*?)(?=\nContent Hash:|\nEvidence ID:|\nSource Status:|\nVerdict:|$)/
     );
 
   const contentHashMatch =
     text.match(
-      /Content Hash:\s*([\s\S]*?)(?=\nEvidence ID:|$)/
+      /Content Hash:\s*([\s\S]*?)(?=\nEvidence ID:|\nSource Status:|\nVerdict:|$)/
     );
 
   const evidenceIdMatch =
     text.match(
-      /Evidence ID:\s*([\s\S]*?)(?=\nVerdict:|$)/
+      /Evidence ID:\s*([\s\S]*?)(?=\nSource Status:|\nVerdict:|$)/
+    );
+
+  const sourceStatusMatch =
+    text.match(
+      /Source Status:\s*([\s\S]*?)(?=\nVerdict:|$)/
     );
 
   const verdictMatch =
@@ -608,6 +883,11 @@ function parseContractResult(text) {
     evidenceId:
       evidenceIdMatch
         ? evidenceIdMatch[1].trim()
+        : "",
+
+    sourceStatus:
+      sourceStatusMatch
+        ? sourceStatusMatch[1].trim()
         : "",
 
     verdict:
@@ -691,6 +971,17 @@ function ResultCard({
 
         <div className="result-row">
           <span>
+            Source Status
+          </span>
+
+          <p>
+            {result.sourceStatus ||
+              "Not available"}
+          </p>
+        </div>
+
+        <div className="result-row">
+          <span>
             Content Hash
           </span>
 
@@ -748,6 +1039,37 @@ function ResultCard({
             </p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function HistoryCard({
+  record,
+  index,
+}) {
+  return (
+    <div className="architecture-step">
+      <div className="step-number">
+        {String(index + 1).padStart(
+          2,
+          "0"
+        )}
+      </div>
+
+      <div>
+        <h3>
+          {record.verdict}
+        </h3>
+
+        <p>
+          {record.claim}
+        </p>
+
+        <p className="history-evidence-id">
+          Evidence ID:{" "}
+          {record.evidenceId}
+        </p>
       </div>
     </div>
   );
